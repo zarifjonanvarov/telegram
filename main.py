@@ -9,7 +9,10 @@ from dotenv import load_dotenv
 
 load_dotenv(".env", override=True)
 TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN: exit("Xatolik: .env faylida BOT_TOKEN topilmadi!")
+
+if not TOKEN:
+    print("Xatolik: BOT_TOKEN topilmadi!")
+    exit(1)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -46,4 +49,62 @@ async def show_categories(call: CallbackQuery):
     conn.close()
     buttons = [[InlineKeyboardButton(text=name, callback_data=f"cat_{id}")] for id, name in cats]
     buttons.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="main")])
-    await call
+    await call.message.edit_text("Kategoriyani tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("cat_"))
+async def show_books(call: CallbackQuery):
+    cat_id = call.data.split("_")[1]
+    conn = sqlite3.connect("shop.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title FROM books WHERE cat_id = ?", (cat_id,))
+    books = cursor.fetchall()
+    conn.close()
+    buttons = [[InlineKeyboardButton(text=title, callback_data=f"book_{id}")] for id, title in books]
+    buttons.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="catalog")])
+    await call.message.edit_text("Kitobni tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("book_"))
+async def book_detail(call: CallbackQuery):
+    book_id = call.data.split("_")[1]
+    conn = sqlite3.connect("shop.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT title, author, price FROM books WHERE id = ?", (book_id,))
+    b = cursor.fetchone()
+    conn.close()
+    text = f"📖 **{b[0]}**\n✍️ Muallif: {b[1]}\n💰 Narxi: {b[2]} so'm"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Buyurtma berish", callback_data=f"order_{book_id}")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="catalog")]
+    ])
+    await call.message.edit_text(text, reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("order_"))
+async def order_book(call: CallbackQuery):
+    book_id = call.data.split("_")[1]
+    conn = sqlite3.connect("shop.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT title FROM books WHERE id = ?", (book_id,))
+    title = cursor.fetchone()[0]
+    cursor.execute("INSERT INTO orders (user_id, book_title) VALUES (?, ?)", (call.from_user.id, title))
+    conn.commit()
+    conn.close()
+    await call.answer("Buyurtmangiz qabul qilindi!", show_alert=True)
+
+@dp.callback_query(F.data == "main")
+async def back_to_start(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛍 Katalog", callback_data="catalog")]])
+    await call.message.edit_text("Assalomu alaykum! Xush kelibsiz. 👇", reply_markup=kb)
+
+async def main():
+    port = int(os.environ.get("PORT", 8080))
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    asyncio.create_task(site.start())
+    
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
